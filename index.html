@@ -1,0 +1,314 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Fruit Slice Game - Progressive Difficulty</title>
+  <style>
+    body {
+      margin: 0;
+      overflow: hidden;
+      background: #222;
+    }
+    canvas {
+      display: block;
+      background: #eee;
+      margin: 0 auto;
+      border: 2px solid #333;
+    }
+  </style>
+</head>
+<body>
+  <canvas id="gameCanvas" width="800" height="800"></canvas>
+  <script>
+    // Get canvas and context
+    const canvas = document.getElementById("gameCanvas");
+    const ctx = canvas.getContext("2d");
+
+    // Game state variables
+    let objects = []; // array of active fruit/bomb objects
+    let score = 0;
+    let lives = 3;
+    let gameOver = false;
+
+    // Timing and spawn variables
+    let lastTime = performance.now();
+    let spawnTimer = 0;
+    // Base spawn interval (in ms)
+    const baseSpawnIntervalMin = 800;
+    const baseSpawnIntervalMax = 1200;
+
+    // Gravity constant (pixels per frame²)
+    const GRAVITY = 0.15;
+
+    // For tracking total elapsed game time (ms) for progression
+    let elapsedTime = 0;
+
+    // Pointer (swipe) variables
+    let isDrawing = false;
+    // Store recent pointer positions (each is an object {x, y})
+    let pointerPositions = [];
+
+    // Utility: generate a random number between min and max
+    function randRange(min, max) {
+      return Math.random() * (max - min) + min;
+    }
+
+    // Utility: check if a line segment (from (x1,y1) to (x2,y2))
+    // comes within 'radius' of the point (cx,cy)
+    function lineIntersectsCircle(x1, y1, x2, y2, cx, cy, radius) {
+      const dx = x2 - x1;
+      const dy = y2 - y1;
+      const lengthSquared = dx * dx + dy * dy;
+      let t = ((cx - x1) * dx + (cy - y1) * dy) / lengthSquared;
+      t = Math.max(0, Math.min(1, t));
+      const closestX = x1 + t * dx;
+      const closestY = y1 + t * dy;
+      const distX = closestX - cx;
+      const distY = closestY - cy;
+      return (distX * distX + distY * distY) <= (radius * radius);
+    }
+
+    // Create a new game object (fruit or bomb) with progression adjustments
+    function spawnObject() {
+      // Determine a difficulty factor (0 at start; 1 at 5 minutes)
+      const difficulty = elapsedTime / (5 * 60 * 1000);
+      // Bomb probability ramps from 0.1 to a maximum of 0.5 over time.
+      const bombProbability = Math.min(0.5, 0.1 + difficulty * 0.4);
+      const isBomb = Math.random() < bombProbability;
+
+      let type;
+      if (isBomb) {
+        type = "bomb";
+      } else {
+        // Choose one of our fruits.
+        const fruits = ["apple", "banana", "orange"];
+        type = fruits[Math.floor(Math.random() * fruits.length)];
+      }
+
+      // Set a size (all objects have a base size)
+      const size = 40;
+
+      // Start position (random x; y is below the canvas)
+      const x = randRange(size, canvas.width - size);
+      const y = canvas.height + size;
+
+      // Adjusted velocities for a "lobbed" arc:
+      // Fruits now move upward more gently.
+      const vy = randRange(-8, -12);
+      const vx = randRange(-2, 2);
+
+      const obj = {
+        type,      // "apple", "banana", "orange", or "bomb"
+        x, y,
+        vx, vy,
+        size,      // used for drawing and hit radius
+        sliced: false, // whether this object has been sliced already
+        toRemove: false // mark for removal
+      };
+
+      objects.push(obj);
+    }
+
+    // Called when a swipe “slices” an object
+    function sliceObject(obj) {
+      if (obj.sliced) return;
+      obj.sliced = true;
+      obj.toRemove = true;
+      if (obj.type === "bomb") {
+        lives--;
+      } else {
+        score += 10;
+      }
+    }
+
+    // Update game state
+    function update(dt) {
+      // dt is in milliseconds.
+      elapsedTime += dt;
+
+      // Calculate a difficulty factor (0 = easy, 1 = 5 minutes reached).
+      const difficulty = elapsedTime / (5 * 60 * 1000);
+      // Adjust spawn timer: as difficulty increases, spawn objects faster.
+      // We reduce the spawn interval by up to 50% (but never below 30% of the base).
+      const spawnFactor = Math.max(0.3, 1 - difficulty * 0.5);
+
+      spawnTimer -= dt;
+      if (spawnTimer <= 0 && !gameOver) {
+        spawnObject();
+        spawnTimer = randRange(baseSpawnIntervalMin * spawnFactor, baseSpawnIntervalMax * spawnFactor);
+      }
+
+      // Update objects’ positions
+      objects.forEach(obj => {
+        obj.x += obj.vx;
+        obj.y += obj.vy;
+        // Apply gravity (accelerating downward)
+        obj.vy += GRAVITY;
+      });
+
+      // Check for objects that have left the screen (fallen below)
+      objects.forEach(obj => {
+        if (obj.y - obj.size > canvas.height) {
+          // For fruits that fall unsliced, subtract points
+          if (!obj.sliced && obj.type !== "bomb") {
+            score -= 2;
+          }
+          obj.toRemove = true;
+        }
+      });
+
+      // Remove objects that are marked to be removed
+      objects = objects.filter(obj => !obj.toRemove);
+
+      // Check game over condition (lives exhausted)
+      if (lives <= 0) {
+        gameOver = true;
+      }
+    }
+
+    // Draw the game scene
+    function draw() {
+      // Clear the canvas
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+      // Draw score and lives at the top
+      ctx.fillStyle = "#000";
+      ctx.font = "24px sans-serif";
+      ctx.fillText(`Score: ${score}`, 20, 30);
+      ctx.fillText(`Lives: ${lives}`, canvas.width - 120, 30);
+
+      // Draw each game object based on its type
+      objects.forEach(obj => {
+        if (obj.type === "apple") {
+          // Apple: red square
+          ctx.fillStyle = "red";
+          ctx.fillRect(obj.x - obj.size / 2, obj.y - obj.size / 2, obj.size, obj.size);
+        } else if (obj.type === "banana") {
+          // Banana: yellow rectangle (a little longer than tall)
+          ctx.fillStyle = "yellow";
+          ctx.fillRect(obj.x - obj.size * 0.6, obj.y - obj.size / 4, obj.size * 1.2, obj.size / 2);
+        } else if (obj.type === "orange") {
+          // Orange: orange circle
+          ctx.fillStyle = "orange";
+          ctx.beginPath();
+          ctx.arc(obj.x, obj.y, obj.size / 2, 0, Math.PI * 2);
+          ctx.fill();
+        } else if (obj.type === "bomb") {
+          // Bomb: black circle with a red fuse
+          ctx.fillStyle = "black";
+          ctx.beginPath();
+          ctx.arc(obj.x, obj.y, obj.size / 2, 0, Math.PI * 2);
+          ctx.fill();
+          // Draw a little fuse on top
+          ctx.strokeStyle = "red";
+          ctx.lineWidth = 3;
+          ctx.beginPath();
+          ctx.moveTo(obj.x, obj.y - obj.size / 2);
+          ctx.lineTo(obj.x, obj.y - obj.size / 2 - 10);
+          ctx.stroke();
+        }
+      });
+
+      // Draw the swipe trail if the pointer is down
+      if (pointerPositions.length > 1) {
+        ctx.strokeStyle = "rgba(0,0,0,0.5)";
+        ctx.lineWidth = 4;
+        ctx.beginPath();
+        ctx.moveTo(pointerPositions[0].x, pointerPositions[0].y);
+        for (let i = 1; i < pointerPositions.length; i++) {
+          ctx.lineTo(pointerPositions[i].x, pointerPositions[i].y);
+        }
+        ctx.stroke();
+      }
+    }
+
+    // Draw a game-over screen
+    function drawGameOver() {
+      // Draw the last frame of the game
+      draw();
+      // Overlay a translucent dark rectangle
+      ctx.fillStyle = "rgba(0, 0, 0, 0.5)";
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      // Display "Game Over" text
+      ctx.fillStyle = "white";
+      ctx.font = "48px sans-serif";
+      ctx.textAlign = "center";
+      ctx.fillText("Game Over", canvas.width / 2, canvas.height / 2 - 20);
+      ctx.font = "24px sans-serif";
+      ctx.fillText("Click or tap to restart", canvas.width / 2, canvas.height / 2 + 20);
+    }
+
+    // The main game loop
+    function gameLoop(timestamp) {
+      const dt = timestamp - lastTime;
+      lastTime = timestamp;
+
+      if (!gameOver) {
+        update(dt);
+        draw();
+      } else {
+        drawGameOver();
+      }
+      requestAnimationFrame(gameLoop);
+    }
+
+    // --- Pointer Event Handlers for swiping ---
+    function getCanvasCoordinates(evt) {
+      const rect = canvas.getBoundingClientRect();
+      return {
+        x: evt.clientX - rect.left,
+        y: evt.clientY - rect.top
+      };
+    }
+
+    canvas.addEventListener("pointerdown", (evt) => {
+      // If the game is over, restart on pointer down.
+      if (gameOver) {
+        restartGame();
+        return;
+      }
+      isDrawing = true;
+      pointerPositions = [];  // clear previous swipe trail
+      const pos = getCanvasCoordinates(evt);
+      pointerPositions.push(pos);
+    });
+
+    canvas.addEventListener("pointermove", (evt) => {
+      if (!isDrawing) return;
+      const pos = getCanvasCoordinates(evt);
+      // For each swipe segment, check for intersections with objects
+      const lastPos = pointerPositions[pointerPositions.length - 1];
+      objects.forEach(obj => {
+        if (!obj.sliced) {
+          if (lineIntersectsCircle(lastPos.x, lastPos.y, pos.x, pos.y, obj.x, obj.y, obj.size / 2)) {
+            sliceObject(obj);
+          }
+        }
+      });
+      pointerPositions.push(pos);
+    });
+
+    function endSwipe() {
+      isDrawing = false;
+      pointerPositions = [];
+    }
+
+    canvas.addEventListener("pointerup", endSwipe);
+    canvas.addEventListener("pointercancel", endSwipe);
+    canvas.addEventListener("pointerleave", endSwipe);
+
+    // Restart the game by resetting variables.
+    function restartGame() {
+      objects = [];
+      score = 0;
+      lives = 3;
+      gameOver = false;
+      elapsedTime = 0;
+      lastTime = performance.now();
+    }
+
+    // Start the game loop
+    requestAnimationFrame(gameLoop);
+  </script>
+</body>
+</html>
